@@ -1,13 +1,14 @@
 package org.apache.spark.ml.made
 
-import breeze.linalg.{DenseVector => BVector, sum}
+import breeze.linalg.{sum, DenseVector => BVector}
 import org.apache.spark.ml.linalg.{DenseVector, Vector, Vectors}
 import org.apache.spark.ml.regression.{RegressionModel, Regressor}
-import org.apache.spark.ml.param.{ParamMap, DoubleParam, IntParam}
+import org.apache.spark.ml.param.{DoubleParam, IntParam, ParamMap}
 import org.apache.spark.ml.stat.Summarizer
-import org.apache.spark.ml.util.{DefaultParamsWritable, Identifiable, MetadataUtils}
+import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsReader, DefaultParamsWritable, DefaultParamsWriter, Identifiable, MLReadable, MLReader, MLWritable, MLWriter, MetadataUtils}
 import org.apache.spark.ml.PredictorParams
-import org.apache.spark.sql.{Dataset, Row}
+import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
+import org.apache.spark.sql.{Dataset, Encoder, Row}
 
 
 trait LinearRegressionParams extends PredictorParams {
@@ -29,7 +30,7 @@ class LinearRegression(override val uid: String)
 
   def this() = this(Identifiable.randomUID("linearRegression"))
 
-  override def copy(extra: ParamMap): LinearRegression = ???
+  override def copy(extra: ParamMap): LinearRegression = defaultCopy(extra)
 
   override protected def train(dataset: Dataset[_]): LinearRegressionModel = {
     val numFeatures = MetadataUtils.getNumFeatures(dataset, $(featuresCol))
@@ -58,10 +59,13 @@ class LinearRegression(override val uid: String)
 
     copyValues(new LinearRegressionModel(params)).setParent(this)
   }
+
 }
 
+object LinearRegression extends DefaultParamsReadable[LinearRegression]
+
 class LinearRegressionModel protected[made](override val uid: String, weights: Vector)
-  extends RegressionModel[Vector, LinearRegressionModel] with PredictorParams {
+  extends RegressionModel[Vector, LinearRegressionModel] with PredictorParams with MLWritable {
 
   def this(weights: Vector) = this(Identifiable.randomUID("linearRegressionModel"), weights)
 
@@ -71,9 +75,38 @@ class LinearRegressionModel protected[made](override val uid: String, weights: V
     sum(x * weights.asBreeze.toDenseVector)
   }
 
-  override def copy(extra: ParamMap): LinearRegressionModel = ???
+  override def copy(extra: ParamMap): LinearRegressionModel = copyValues(new LinearRegressionModel(weights))
 
   def getWeights(): BVector[Double] = {
     weights.asBreeze.toDenseVector
+  }
+
+  override def write: MLWriter = new DefaultParamsWriter(this) {
+    override protected def saveImpl(path: String): Unit = {
+      super.saveImpl(path)
+
+      val params = Tuple1(weights.asInstanceOf[Vector])
+
+      sqlContext.createDataFrame(Seq(params)).write.parquet(path + "/vectors")
+    }
+  }
+}
+
+object LinearRegressionModel extends MLReadable[LinearRegressionModel] {
+  override def read: MLReader[LinearRegressionModel] = new MLReader[LinearRegressionModel] {
+    override def load(path: String): LinearRegressionModel = {
+      val metadata = DefaultParamsReader.loadMetadata(path, sc)
+
+      val vectors = sqlContext.read.parquet(path + "/vectors")
+
+      // Used to convert untyped dataframes to datasets with vectors
+      implicit val encoder: Encoder[Vector] = ExpressionEncoder()
+
+      val (params) = vectors.select(vectors("_1").as[Vector]).first()
+
+      val model = new LinearRegressionModel(params)
+      metadata.getAndSetParams(model)
+      model
+    }
   }
 }

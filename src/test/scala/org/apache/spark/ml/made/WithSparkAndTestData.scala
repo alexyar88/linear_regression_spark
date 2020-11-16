@@ -15,10 +15,12 @@ trait WithSparkAndTestData {
     .add("z", DoubleType)
     .add("label", DoubleType)
 
+  lazy val test_dataset_path: String = getClass.getResource("/test_data.csv").getPath
+
   lazy val df_raw: DataFrame = _sqlc.read
     .option("header", "true")
     .schema(schema)
-    .csv("data.csv")
+    .csv(test_dataset_path)
 
   lazy val assembler: VectorAssembler = new VectorAssembler()
     .setInputCols(Array("x", "y", "z"))

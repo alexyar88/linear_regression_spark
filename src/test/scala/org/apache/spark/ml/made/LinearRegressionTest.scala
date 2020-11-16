@@ -1,11 +1,26 @@
 package org.apache.spark.ml.made
 
+import com.google.common.io.Files
 import org.scalatest._
 import flatspec._
 import matchers._
+import org.apache.spark.ml.{Pipeline, PipelineModel}
 import org.apache.spark.ml.evaluation.RegressionEvaluator
+import org.apache.spark.sql.DataFrame
 
 class LinearRegressionTest extends AnyFlatSpec with should.Matchers with WithSparkAndTestData {
+
+  private def validateModel(model: LinearRegressionModel, data: DataFrame): Unit = {
+    val df_result = model.transform(df)
+
+    val evaluator = new RegressionEvaluator()
+      .setLabelCol("label")
+      .setPredictionCol("prediction")
+      .setMetricName("mse")
+
+    val mse = evaluator.evaluate(df_result)
+    mse should be < mseLimit
+  }
 
   val paramsDelta = 0.01
   val mseLimit = 0.00001
@@ -36,15 +51,51 @@ class LinearRegressionTest extends AnyFlatSpec with should.Matchers with WithSpa
       .setNumIters(100)
 
     val model = lr.fit(df)
-    val df_result = model.transform(df)
+    validateModel(model, df)
+  }
 
-    val evaluator = new RegressionEvaluator()
-      .setLabelCol("label")
-      .setPredictionCol("prediction")
-      .setMetricName("mse")
+  "Estimator" should "work after re-read" in {
 
-    val mse = evaluator.evaluate(df_result)
+    val pipeline = new Pipeline().setStages(Array(
+      new LinearRegression()
+        .setFeaturesCol("features")
+        .setLabelCol("label")
+        .setPredictionCol("prediction")
+        .setLearningRate(1.0)
+        .setNumIters(100)
+    ))
 
-    mse should be < mseLimit
+    val tmpFolder = Files.createTempDir()
+
+    pipeline.write.overwrite().save(tmpFolder.getAbsolutePath)
+
+    val model = Pipeline
+      .load(tmpFolder.getAbsolutePath)
+      .fit(df)
+      .stages(0)
+      .asInstanceOf[LinearRegressionModel]
+
+    validateModel(model, df)
+  }
+
+
+  "Model" should "work after re-read" in {
+
+    val pipeline = new Pipeline().setStages(Array(
+      new LinearRegression()
+        .setFeaturesCol("features")
+        .setLabelCol("label")
+        .setPredictionCol("prediction")
+        .setLearningRate(1.0)
+        .setNumIters(100)
+    ))
+
+    val model = pipeline.fit(df)
+    val tmpFolder = Files.createTempDir()
+    model.write.overwrite().save(tmpFolder.getAbsolutePath)
+
+    val reRead = PipelineModel.load(tmpFolder.getAbsolutePath)
+
+    validateModel(reRead.stages(0).asInstanceOf[LinearRegressionModel], df)
   }
 }
